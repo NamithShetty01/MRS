@@ -45,6 +45,7 @@ Where:
 
 ```text
 movie-recommendation/
+	.gitignore
 	app.py
 	requirements.txt
 	README.md
@@ -53,6 +54,7 @@ movie-recommendation/
 		movies.csv
 		ratings.csv
 	src/
+		__init__.py
 		collaborative_filtering.py
 		content_filtering.py
 		data_preprocessing.py
@@ -60,6 +62,7 @@ movie-recommendation/
 		hybrid_recommender.py
 		poster_service.py
 	visualization/
+		__init__.py
 		plots.py
 ```
 
@@ -143,14 +146,6 @@ See src/evaluation.py for metric implementations.
 	- CF_MIN_MOVIE_RATINGS
 - If posters do not load, verify TMDB key and internet access.
 - If Streamlit command is missing, install dependencies again in the active virtual environment.
-
-## Future Improvements
-
-- Add Docker support
-- Add model persistence and caching
-- Add user authentication and watchlists
-- Add API endpoints for recommendations
-- Add automated tests and CI workflow
 
 ## Author
 
