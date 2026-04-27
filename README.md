@@ -1,11 +1,11 @@
 # MRS - Movie Recommendation System
 
-A Netflix-style movie recommendation web app built with Streamlit and a hybrid recommender that combines:
+A  movie recommendation web app built with Streamlit and a hybrid recommender that combines:
 
 - Collaborative Filtering (SVD-based)
 - Content-Based Filtering (genre similarity)
 
-The app supports personalized recommendations, similar-movie discovery, popularity views, analytics plots, and optional poster fetching from TMDB.
+The app supports personalized recommendations, similar-movie discovery, popularity views, and analytics plots.
 
 ## Features
 
@@ -15,7 +15,6 @@ The app supports personalized recommendations, similar-movie discovery, populari
 - Trending, top-rated, and most-popular movie views
 - Search by movie title
 - Interactive analytics and dataset visualizations
-- Optional live movie posters via TMDB API
 - Automatic MovieLens download fallback if data is missing
 
 ## How the Hybrid Model Works
@@ -115,16 +114,6 @@ http://localhost:8501
 	1) download MovieLens data, or
 	2) generate a realistic sample dataset for offline use.
 
-## Optional TMDB Poster Integration
-
-To display real movie posters:
-
-1. Create a free TMDB account: https://www.themoviedb.org/signup
-2. Generate an API key from account settings
-3. Enter the API key in the app sidebar
-
-If no API key is provided, the app still works without posters.
-
 ## Evaluation Support
 
 The project includes evaluation utilities for offline testing:
@@ -144,7 +133,6 @@ See src/evaluation.py for metric implementations.
 	- CF_MAX_MOVIES
 	- CF_MIN_USER_RATINGS
 	- CF_MIN_MOVIE_RATINGS
-- If posters do not load, verify TMDB key and internet access.
 - If Streamlit command is missing, install dependencies again in the active virtual environment.
 
 ## Author
