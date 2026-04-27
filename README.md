@@ -154,4 +154,4 @@ See src/evaluation.py for metric implementations.
 
 ## Author
 
-Namith Shetty
+Namith Naveen Shetty
