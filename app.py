@@ -1,7 +1,7 @@
 ﻿"""
 app.py
 ------
-OTT-Style Movie Recommendation Web Application
+TMDB-Style Movie Recommendation Web Application
 Built with Streamlit + Hybrid Recommendation Engine (SVD-CF + Genre-CB)
 
 Run:  streamlit run app.py
@@ -11,7 +11,7 @@ import os
 import sys
 import base64
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 # Make sure src/ and visualization/ are importable
 ROOT = Path(__file__).resolve().parent
@@ -24,7 +24,14 @@ import streamlit.components.v1 as components
 
 from src.data_preprocessing import preprocess_pipeline
 from src.hybrid_recommender import HybridRecommender
-from src.poster_service import get_poster_url, get_poster_url_by_title, clear_cache
+from src.poster_service import (
+    get_poster_url,
+    get_poster_url_by_title,
+    get_poster_url_from_wikipedia,
+    clear_cache,
+    prefetch_posters_for_movies,
+    load_prefetched_posters,
+)
 from visualization.plots import (
     plot_rating_distribution,
     plot_genre_distribution,
@@ -40,34 +47,44 @@ from visualization.plots import (
 # ============================================================
 st.set_page_config(
     page_title="CineAI",
-    page_icon="🎬",
+    page_icon="🟦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ============================================================
-# Custom CSS — 100% Netflix faithful
+# Custom CSS — TMDB-inspired theme
 # ============================================================
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Netflix+Sans:wght@300;400;500;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-    /* ═══════════════════════════════════════════════════════
-       GLOBAL RESET — pure Netflix black
-    ═══════════════════════════════════════════════════════ */
+    :root {
+        --tmdb-bg: #0b1320;
+        --tmdb-panel: #0f1d30;
+        --tmdb-border: rgba(160, 200, 230, 0.16);
+        --tmdb-text: #eef5fb;
+        --tmdb-muted: #9eb3c7;
+        --tmdb-accent: #01b4e4;
+        --tmdb-accent-2: #90cea1;
+        --tmdb-shadow: 0 24px 72px rgba(0, 0, 0, 0.38);
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     html, body,
     [data-testid="stAppViewContainer"],
     [data-testid="stMain"],
     section.main > div {
-        background-color: #141414 !important;
-        color: #e5e5e5;
-        font-family: 'Netflix Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        background:
+            radial-gradient(circle at top left, rgba(1, 180, 228, 0.13), transparent 30%),
+            radial-gradient(circle at right top, rgba(144, 206, 161, 0.09), transparent 34%),
+            linear-gradient(180deg, #09111c 0%, #0b1320 36%, #09111c 100%) !important;
+        color: var(--tmdb-text);
+        font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
-    /* Hide Streamlit default chrome (Deploy/menu/header badge) */
     [data-testid="stToolbar"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"],
@@ -78,110 +95,100 @@ st.markdown(
         height: 0 !important;
     }
 
-    /* Kill Streamlit chrome padding */
     [data-testid="stMain"] > div:first-child { padding-top: 0 !important; }
     .block-container { padding: 0 4% 40px 4% !important; max-width: 100% !important; }
 
-    /* ═══════════════════════════════════════════════════════
-       SIDEBAR — Netflix dark panel
-    ═══════════════════════════════════════════════════════ */
     [data-testid="stSidebar"] {
-        background-color: #000000 !important;
-        border-right: 1px solid #2a2a2a !important;
+        background: linear-gradient(180deg, #09111c 0%, #0d1b2c 100%) !important;
+        border-right: 1px solid var(--tmdb-border) !important;
     }
-    [data-testid="stSidebar"] * { color: #e5e5e5 !important; }
-    [data-testid="stSidebar"] .stTextInput > div > div > input {
-        background: #1a1a1a !important;
+    [data-testid="stSidebar"] * { color: var(--tmdb-text) !important; }
+    [data-testid="stSidebar"] .stTextInput > div > div > input,
+    [data-testid="stSidebar"] .stSelectbox > div > div,
+    .stTextInput > div > div > input,
+    .stSelectbox > div > div {
+        background: rgba(255,255,255,0.04) !important;
         color: #fff !important;
-        border: 1px solid #404040 !important;
-        border-radius: 4px !important;
-    }
-    [data-testid="stSidebar"] .stSelectbox > div > div {
-        background: #1a1a1a !important;
-        border: 1px solid #404040 !important;
+        border: 1px solid var(--tmdb-border) !important;
+        border-radius: 12px !important;
     }
 
-    /* ── Sidebar nav buttons ── */
     [data-testid="stSidebar"] .stButton > button {
-        background: transparent !important;
-        color: #e5e5e5 !important;
-        border: none !important;
-        border-radius: 4px !important;
+        background: rgba(255,255,255,0.02) !important;
+        color: var(--tmdb-text) !important;
+        border: 1px solid transparent !important;
+        border-radius: 12px !important;
         text-align: left !important;
-        padding: 10px 14px !important;
+        padding: 11px 14px !important;
         width: 100% !important;
         font-size: 14px !important;
-        font-weight: 400 !important;
-        letter-spacing: 0.3px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.2px !important;
         margin-bottom: 2px !important;
-        transition: background 0.12s !important;
+        transition: background 0.14s, border-color 0.14s !important;
         transform: none !important;
         box-shadow: none !important;
     }
     [data-testid="stSidebar"] .stButton > button:hover {
-        background: rgba(255,255,255,0.08) !important;
+        background: rgba(1,180,228,0.12) !important;
+        border-color: rgba(1,180,228,0.18) !important;
         color: #ffffff !important;
         transform: none !important;
         box-shadow: none !important;
     }
 
-    /* ═══════════════════════════════════════════════════════
-       GLOBAL BUTTONS  (main content area)
-    ═══════════════════════════════════════════════════════ */
     .stButton > button {
-        background: #e50914 !important;
+        background: linear-gradient(135deg, var(--tmdb-accent), #0a7ea5) !important;
         color: #fff !important;
         border: none !important;
-        border-radius: 4px !important;
+        border-radius: 12px !important;
         font-weight: 700 !important;
         font-size: 14px !important;
         padding: 9px 20px !important;
         cursor: pointer !important;
-        transition: background 0.12s, transform 0.08s !important;
+        transition: transform 0.14s, box-shadow 0.14s, filter 0.14s !important;
+        box-shadow: 0 10px 24px rgba(1,180,228,0.18) !important;
     }
     .stButton > button:hover {
-        background: #f40612 !important;
-        transform: scale(1.03) !important;
+        filter: brightness(1.06) !important;
+        transform: translateY(-1px) !important;
     }
 
-    /* ── Play / More-Info button pair ── */
     .nf-btn-play {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        background: #ffffff;
-        color: #000 !important;
+        background: linear-gradient(135deg, #ffffff, #dff6fb);
+        color: #03111d !important;
         border: none;
-        border-radius: 4px;
+        border-radius: 999px;
         font-size: 15px;
         font-weight: 700;
         padding: 10px 24px;
         cursor: pointer;
         margin-right: 10px;
-        transition: background 0.12s, opacity 0.12s;
+        transition: transform 0.14s, opacity 0.14s, box-shadow 0.14s;
         text-decoration: none;
+        box-shadow: 0 12px 28px rgba(255,255,255,0.08);
     }
-    .nf-btn-play:hover { background: rgba(255,255,255,0.75); }
+    .nf-btn-play:hover { opacity: 0.95; transform: translateY(-1px); }
     .nf-btn-info {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        background: rgba(109,109,110,0.7);
+        background: rgba(255,255,255,0.08);
         color: #fff !important;
-        border: none;
-        border-radius: 4px;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 999px;
         font-size: 15px;
         font-weight: 700;
         padding: 10px 24px;
         cursor: pointer;
-        transition: background 0.12s;
+        transition: background 0.14s, transform 0.14s;
         text-decoration: none;
     }
-    .nf-btn-info:hover { background: rgba(109,109,110,0.4); }
+    .nf-btn-info:hover { background: rgba(1,180,228,0.14); transform: translateY(-1px); }
 
-    /* ═══════════════════════════════════════════════════════
-       HERO BANNER — full-bleed, no border-radius
-    ═══════════════════════════════════════════════════════ */
     .nf-hero {
         position: relative;
         width: calc(100% + 8%);
@@ -193,22 +200,21 @@ st.markdown(
         background-position: center top;
         overflow: hidden;
         margin-bottom: 0;
+        border-bottom: 1px solid var(--tmdb-border);
     }
-    /* vignette: left fill + bottom fade into #141414 */
     .nf-hero::after {
         content: "";
         position: absolute;
         inset: 0;
         background:
-            linear-gradient(to right,  rgba(20,20,20,0.98) 0%,  rgba(20,20,20,0.68) 38%, transparent 75%),
-            linear-gradient(to top,    rgba(20,20,20,1.00) 0%,  rgba(20,20,20,0.00) 28%);
+            linear-gradient(to right,  rgba(9,17,28,0.98) 0%,  rgba(9,17,28,0.72) 40%, transparent 78%),
+            linear-gradient(to top,    rgba(9,17,28,1.00) 0%,  rgba(9,17,28,0.00) 28%);
     }
-    /* gradient colour border separating hero from rows */
     .nf-hero-fade {
         position: relative;
         margin-top: -120px;
         height: 120px;
-        background: linear-gradient(to bottom, transparent, #141414);
+        background: linear-gradient(to bottom, transparent, #0b1320);
         z-index: 2;
         margin-left: -4%;
         margin-right: -4%;
@@ -225,13 +231,13 @@ st.markdown(
         font-size: 11px;
         letter-spacing: 3px;
         text-transform: uppercase;
-        color: #e50914;
+        color: var(--tmdb-accent);
         font-weight: 700;
         margin-bottom: 12px;
     }
     .nf-hero-title {
         font-size: clamp(2rem, 4vw, 3.4rem);
-        font-weight: 700;
+        font-weight: 800;
         line-height: 1.05;
         color: #fff;
         text-shadow: 2px 2px 8px rgba(0,0,0,0.8);
@@ -239,61 +245,58 @@ st.markdown(
     }
     .nf-hero-desc {
         font-size: 1rem;
-        color: #d2d2d2;
+        color: #d4e0ea;
         line-height: 1.6;
         margin-bottom: 20px;
         text-shadow: 1px 1px 4px rgba(0,0,0,0.9);
     }
     .nf-hero-meta {
         font-size: 13px;
-        color: #bcbcbc;
+        color: var(--tmdb-muted);
         margin-bottom: 22px;
         display: flex;
         gap: 16px;
         flex-wrap: wrap;
         align-items: center;
     }
-    .nf-match { color: #46d369; font-weight: 700; font-size: 14px; }
+    .nf-match { color: var(--tmdb-accent-2); font-weight: 700; font-size: 14px; }
     .nf-age   {
-        border: 1px solid #bcbcbc;
+        border: 1px solid rgba(144, 206, 161, 0.6);
         padding: 1px 6px;
         font-size: 12px;
-        color: #bcbcbc;
+        color: var(--tmdb-accent-2);
     }
 
-    /* ═══════════════════════════════════════════════════════
-       ROW LABELS — exact Netflix typography
-    ═══════════════════════════════════════════════════════ */
     .nf-row-label {
         font-size: 1.1rem;
         font-weight: 700;
-        color: #e5e5e5;
+        color: var(--tmdb-text);
         margin: 28px 0 8px 0;
         letter-spacing: 0;
     }
-    .nf-row-label:hover { color: #bababa; }
+    .nf-row-label:hover { color: var(--tmdb-accent); }
 
-    /* ═══════════════════════════════════════════════════════
-       MOVIE CARD — Netflix thumbnail style
-    ═══════════════════════════════════════════════════════ */
     .nf-card {
         position: relative;
-        border-radius: 4px;
+        border-radius: 16px;
         overflow: hidden;
         cursor: pointer;
-        transition: transform 0.2s ease, box-shadow 0.2s ease, z-index 0s 0.2s;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, z-index 0s 0.2s, border-color 0.2s ease;
         z-index: 1;
-        background: #181818;
+        background: linear-gradient(180deg, var(--tmdb-panel) 0%, #0c1727 100%);
+        border: 1px solid var(--tmdb-border);
+        box-shadow: 0 12px 30px rgba(0,0,0,0.18);
     }
     .nf-card:hover {
         transform: scale(1.06);
-        box-shadow: 0 0 24px 8px rgba(0,0,0,0.75);
+        box-shadow: var(--tmdb-shadow);
         z-index: 10;
-        border-radius: 6px 6px 0 0;
+        border-color: rgba(1,180,228,0.45);
+        border-radius: 16px 16px 10px 10px;
         transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
     .nf-card:focus-within {
-        outline: 2px solid #ffffff;
+        outline: 2px solid var(--tmdb-accent);
         outline-offset: 2px;
     }
     .nf-thumb {
@@ -301,7 +304,7 @@ st.markdown(
         aspect-ratio: 2/3;
         object-fit: cover;
         display: block;
-        border-radius: 4px;
+        border-radius: 16px 16px 0 0;
     }
     .nf-thumb-placeholder {
         width: 100%;
@@ -311,17 +314,16 @@ st.markdown(
         align-items: center;
         justify-content: center;
         padding: 12px;
-        border-radius: 4px;
+        border-radius: 16px 16px 0 0;
         text-align: center;
         gap: 6px;
     }
     .nf-thumb-placeholder .pt { font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.85); line-height: 1.3; word-break: break-word; }
 
-    /* always-visible metadata strip for each card */
     .nf-card-meta {
         padding: 8px 8px 9px;
-        background: #181818;
-        border-top: 1px solid #262626;
+        background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
+        border-top: 1px solid rgba(255,255,255,0.06);
     }
     .nf-card-meta .nf-card-title {
         margin-bottom: 3px;
@@ -332,17 +334,16 @@ st.markdown(
         align-items: center;
         gap: 8px;
         font-size: 10px;
-        color: #bcbcbc;
+        color: var(--tmdb-muted);
     }
     .nf-card-meta .nf-meta-line .nf-rating {
-        color: #f5c518;
+        color: #ffd166;
         font-weight: 700;
     }
 
-    /* hover info panel that slides up under the thumb */
     .nf-card-info {
         display: none;
-        background: #181818;
+        background: linear-gradient(180deg, rgba(15,29,48,0.98), rgba(9,17,28,0.98));
         border-radius: 0 0 6px 6px;
         padding: 10px 10px 12px;
         box-shadow: 0 8px 20px rgba(0,0,0,0.8);
@@ -352,19 +353,16 @@ st.markdown(
     .nf-card:hover .nf-card-info { display: block; }
     .nf-card-title { font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .nf-card-row   { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
-    .nf-green  { color: #46d369; font-size: 11px; font-weight: 700; }
+    .nf-green  { color: var(--tmdb-accent-2); font-size: 11px; font-weight: 700; }
     .nf-tag {
-        border: 1px solid #808080;
+        border: 1px solid rgba(255,255,255,0.18);
         border-radius: 3px;
         font-size: 9px;
         padding: 1px 4px;
-        color: #ddd;
+        color: #dfeaf3;
     }
-    .nf-genre { font-size: 10px; color: #bcbcbc; }
+    .nf-genre { font-size: 10px; color: var(--tmdb-muted); }
 
-    /* ═══════════════════════════════════════════════════════
-       HORIZONTAL SCROLL RAIL
-    ═══════════════════════════════════════════════════════ */
     [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
         overflow-x: auto !important;
         flex-wrap: nowrap !important;
@@ -378,7 +376,6 @@ st.markdown(
         flex-shrink: 0 !important;
     }
 
-    /* Rail navigation controls */
     .nf-rail-nav {
         display: flex;
         align-items: center;
@@ -388,63 +385,58 @@ st.markdown(
     }
     .nf-rail-count {
         font-size: 11px;
-        color: #9a9a9a;
+        color: var(--tmdb-muted);
         letter-spacing: 0.4px;
         margin-right: 8px;
     }
     .nf-rail-nav .stButton > button {
-        background: rgba(0,0,0,0.55) !important;
+        background: rgba(7, 20, 34, 0.7) !important;
         color: #fff !important;
-        border: 1px solid rgba(255,255,255,0.25) !important;
-        border-radius: 4px !important;
+        border: 1px solid var(--tmdb-border) !important;
+        border-radius: 999px !important;
         min-width: 38px !important;
         height: 32px !important;
         padding: 0 !important;
         font-size: 14px !important;
         line-height: 1 !important;
         opacity: 0.16 !important;
-        transition: opacity 0.18s, background 0.12s !important;
+        transition: opacity 0.18s, background 0.12s, transform 0.12s !important;
     }
     .nf-rail-nav:hover .stButton > button { opacity: 0.95 !important; }
     .nf-rail-nav .stButton > button:disabled { opacity: 0.08 !important; }
     .nf-rail-nav .stButton > button:hover {
-        background: rgba(229,9,20,0.82) !important;
-        border-color: rgba(229,9,20,1) !important;
-        transform: none !important;
+        background: rgba(1,180,228,0.18) !important;
+        border-color: rgba(1,180,228,0.65) !important;
+        transform: translateY(-1px) !important;
         opacity: 1 !important;
     }
 
-    /* Keyboard accessibility polish */
     .stButton > button:focus-visible,
     [data-testid="stSidebar"] .stButton > button:focus-visible,
     .stTextInput input:focus-visible,
     .stSelectbox [role="combobox"]:focus-visible {
-        outline: 2px solid #ffffff !important;
+        outline: 2px solid var(--tmdb-accent) !important;
         outline-offset: 2px !important;
         box-shadow: none !important;
     }
 
-    /* ═══════════════════════════════════════════════════════
-       DETAIL / SCORE BOXES
-    ═══════════════════════════════════════════════════════ */
     .detail-poster {
         width: 100%; height: 320px; border-radius: 4px;
         display: flex; align-items: center; justify-content: center;
         flex-direction: column;
     }
     .detail-title { font-size: 2.2rem; font-weight: 700; margin-bottom: 6px; color: #fff; }
-    .detail-meta  { color: #999; font-size: 0.9rem; margin-bottom: 12px; }
+    .detail-meta  { color: var(--tmdb-muted); font-size: 0.9rem; margin-bottom: 12px; }
     .score-box {
-        background: #181818;
-        border: 1px solid #2a2a2a;
-        border-radius: 4px;
+        background: linear-gradient(180deg, var(--tmdb-panel), #0c1727);
+        border: 1px solid var(--tmdb-border);
+        border-radius: 16px;
         padding: 14px 18px;
         text-align: center;
     }
-    .score-val { font-size: 1.8rem; font-weight: 700; color: #e50914; }
-    .score-lbl { font-size: 11px; color: #808080; margin-top: 2px; }
+    .score-val { font-size: 1.8rem; font-weight: 700; color: var(--tmdb-accent); }
+    .score-lbl { font-size: 11px; color: var(--tmdb-muted); margin-top: 2px; }
 
-    /* ── Movie detail cinematic header ── */
     .detail-hero {
         position: relative;
         min-height: 320px;
@@ -461,8 +453,8 @@ st.markdown(
         position: absolute;
         inset: 0;
         background:
-            linear-gradient(to right, rgba(20,20,20,0.96) 0%, rgba(20,20,20,0.7) 45%, rgba(20,20,20,0.25) 100%),
-            linear-gradient(to top,   rgba(20,20,20,1.00) 0%, transparent 35%);
+            linear-gradient(to right, rgba(9,17,28,0.96) 0%, rgba(9,17,28,0.7) 45%, rgba(9,17,28,0.25) 100%),
+            linear-gradient(to top,   rgba(9,17,28,1.00) 0%, transparent 35%);
     }
     .detail-hero-body {
         position: relative;
@@ -474,80 +466,74 @@ st.markdown(
     .detail-hero-body .detail-meta { color: #c0c0c0; margin-bottom: 14px; }
     .detail-hero-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
     .detail-chip {
-        background: rgba(255,255,255,0.08);
-        border: 1px solid rgba(255,255,255,0.15);
-        border-radius: 3px;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 999px;
         padding: 4px 10px;
         font-size: 12px;
         color: #e5e5e5;
     }
     .detail-chip.red {
-        background: rgba(229,9,20,0.15);
-        border-color: rgba(229,9,20,0.4);
-        color: #ff8080;
+        background: rgba(1,180,228,0.14);
+        border-color: rgba(1,180,228,0.4);
+        color: #9ce5ff;
     }
 
-    /* ═══════════════════════════════════════════════════════
-       MISC
-    ═══════════════════════════════════════════════════════ */
     .metric-card {
-        background: #181818;
-        border-radius: 4px;
+        background: linear-gradient(180deg, var(--tmdb-panel), #0c1727);
+        border-radius: 16px;
         padding: 20px;
         text-align: center;
-        border: 1px solid #2a2a2a;
+        border: 1px solid var(--tmdb-border);
     }
-    .metric-val { font-size: 2rem; font-weight: 700; color: #e50914; }
-    .metric-lbl { font-size: 12px; color: #808080; margin-top: 4px; }
+    .metric-val { font-size: 2rem; font-weight: 700; color: var(--tmdb-accent); }
+    .metric-lbl { font-size: 12px; color: var(--tmdb-muted); margin-top: 4px; }
 
     .search-result-row {
-        background: #181818;
-        border-radius: 4px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+        border-radius: 16px;
         padding: 12px 16px;
         margin-bottom: 8px;
-        border: 1px solid #2a2a2a;
+        border: 1px solid var(--tmdb-border);
         cursor: pointer;
         transition: border-color 0.12s;
     }
-    .search-result-row:hover { border-color: #e50914; }
+    .search-result-row:hover { border-color: rgba(1,180,228,0.45); }
 
     .badge {
         display: inline-block;
-        background: #2a2a2a;
-        color: #c0c0c0;
+        background: rgba(255,255,255,0.06);
+        color: #d6e2ee;
         font-size: 9px;
         padding: 2px 6px;
-        border-radius: 3px;
+        border-radius: 999px;
         margin-right: 3px;
         margin-top: 3px;
     }
     h1,h2,h3,h4 { color: #fff !important; }
-    hr { border-color: #2a2a2a; }
-    .stSlider > div { color: #e5e5e5; }
-    .stSelectbox > div > div { background: #181818 !important; color: #e5e5e5 !important; }
+    hr { border-color: var(--tmdb-border); }
+    .stSlider > div { color: var(--tmdb-text); }
     .stTextInput > div > div > input {
-        background: #181818 !important;
+        background: rgba(255,255,255,0.04) !important;
         color: #fff !important;
-        border: 1px solid #404040 !important;
-        border-radius: 4px !important;
+        border: 1px solid var(--tmdb-border) !important;
+        border-radius: 12px !important;
     }
 
-    /* section header / caption (kept for My Recs and Analytics) */
     .section-header {
         font-size: 1.1rem;
         font-weight: 700;
-        color: #e5e5e5;
+        color: var(--tmdb-text);
         margin: 28px 0 6px 0;
     }
-    .section-caption { margin: 0 0 10px 0; color: #808080; font-size: 12px; }
+    .section-caption { margin: 0 0 10px 0; color: var(--tmdb-muted); font-size: 12px; }
 
-    /* hero-tag / hero-chip (kept for detail page) */
     .hero-tag {
         display: inline-block;
         font-size: 10px;
         letter-spacing: 3px;
         text-transform: uppercase;
-        color: #e50914;
+        color: var(--tmdb-accent);
         font-weight: 700;
         margin-bottom: 12px;
     }
@@ -595,6 +581,14 @@ data = rec.data
 # movieId -> tmdbId (from links.csv)
 _TMDB_MAP: dict = data.get("tmdb_map", {})
 
+# Load prefetched posters CSV (if present)
+_PRELOADED_POSTERS: dict = {}
+try:
+    posters_path = ROOT / "data" / "posters.csv"
+    _PRELOADED_POSTERS = load_prefetched_posters(posters_path)
+except Exception:
+    _PRELOADED_POSTERS = {}
+
 
 # ============================================================
 # Utility: poster gradient & card HTML
@@ -628,17 +622,51 @@ def _genre_badges(genres: str) -> str:
     return "".join(f'<span class="badge">{g}</span>' for g in parts)
 
 
+def _placeholder_poster_data_uri(title: str, subtitle: str = "TMDB Poster") -> str:
+    """Generate a poster-like SVG fallback when no real poster is available."""
+    safe_title = title.replace("&", "and") if title else "Untitled"
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='300' height='450' viewBox='0 0 300 450'>"
+        "<defs>"
+        "<linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+        "<stop offset='0%' stop-color='#0b3d5c'/>"
+        "<stop offset='50%' stop-color='#1f6f8b'/>"
+        "<stop offset='100%' stop-color='#0f2027'/>"
+        "</linearGradient>"
+        "</defs>"
+        "<rect width='300' height='450' fill='url(#g)'/>"
+        "<rect x='18' y='18' width='264' height='414' rx='18' ry='18' fill='rgba(0,0,0,0.18)' stroke='rgba(255,255,255,0.12)'/>"
+        f"<text x='150' y='205' text-anchor='middle' font-family='Arial' font-size='24' font-weight='700' fill='white'>{safe_title[:26]}</text>"
+        f"<text x='150' y='245' text-anchor='middle' font-family='Arial' font-size='14' fill='white' opacity='0.9'>{subtitle}</text>"
+        "</svg>"
+    )
+    return f"data:image/svg+xml;charset=UTF-8,{quote(svg)}"
+
+
+def _seeded_cover_image_url(movie_id: int, title: str) -> str:
+    """Return a deterministic cover image URL as last-resort fallback."""
+    seed = quote(f"{movie_id}-{title}".strip().lower()[:80], safe="")
+    return f"https://picsum.photos/seed/{seed}/300/450"
+
+
 def _resolve_poster_url(movie_id: int, title: str) -> str | None:
     """Resolve poster using tmdbId first, then title search fallback."""
+    # Prefer prefetched CSV mapping when available
+    if movie_id in _PRELOADED_POSTERS:
+        return _PRELOADED_POSTERS.get(movie_id) or _seeded_cover_image_url(movie_id, title)
+
     tmdb_id = _TMDB_MAP.get(movie_id)
     tmdb_key = st.session_state.get("tmdb_api_key", "").strip()
     if not tmdb_key:
-        return None
+        wiki_url = get_poster_url_from_wikipedia(title)
+        return wiki_url or _seeded_cover_image_url(movie_id, title)
 
     poster_url = get_poster_url(tmdb_id, tmdb_key) if tmdb_id else None
     if not poster_url:
         poster_url = get_poster_url_by_title(title, tmdb_key)
-    return poster_url
+    if not poster_url:
+        poster_url = get_poster_url_from_wikipedia(title)
+    return poster_url or _seeded_cover_image_url(movie_id, title)
 
 
 def _trailer_search_url(title: str) -> str:
@@ -688,7 +716,7 @@ def _inject_hotkeys() -> None:
 
 def render_movie_card(movie_id: int, title: str, genres: str,
                       avg_rating: float, num_ratings: int, key: str) -> None:
-    """Render Netflix-style thumbnail card with hover info panel."""
+    """Render TMDB-style thumbnail card with hover info panel."""
     poster_url = _resolve_poster_url(movie_id, title)
     first_genre = genres.split("|")[0] if genres else "Movie"
     match_pct   = min(99, max(60, int(avg_rating / 5.0 * 99)))
@@ -783,27 +811,76 @@ def render_movie_grid(movies_df: pd.DataFrame, cols: int = 8, key_prefix: str = 
             )
 
 
+def render_posters_from_query(query: str) -> None:
+    """Render poster thumbnails for comma-separated movie ids or titles."""
+    q = (query or "").strip()
+    if not q:
+        st.info("Enter one or more movie IDs or titles in the sidebar and click 'Show Posters'.")
+        return
+
+    parts = [p.strip() for p in q.split(",") if p.strip()]
+    results: list[tuple[str, str | None]] = []
+    for token in parts:
+        url = None
+        # numeric token -> treat as MovieLens movieId
+        if token.isdigit():
+            try:
+                mid = int(token)
+                url = _resolve_poster_url(mid, "")
+            except Exception:
+                url = None
+        else:
+            # try direct title search via TMDB first
+            url = get_poster_url_by_title(token, st.session_state.get("tmdb_api_key", ""))
+            if not url:
+                # fallback: search in catalogue for a matching movie
+                try:
+                    matches = rec.search_movies(token)
+                    if not matches.empty:
+                        m0 = matches.iloc[0]
+                        url = _resolve_poster_url(int(m0["movieId"]), str(m0["title"]))
+                except Exception:
+                    url = None
+
+        results.append((token, url))
+
+    n = len(results)
+    cols = min(5, max(1, n))
+    columns = st.columns(cols)
+    for i, (label, url) in enumerate(results):
+        col = columns[i % cols]
+        with col:
+            if url:
+                st.image(url, caption=label, use_container_width=True)
+            else:
+                st.markdown(
+                    f'<div style="width:100%;padding:24px 12px;border-radius:8px;background:#1a1a1a;'
+                    f'border:1px solid #2a2a2a;text-align:center;color:#bdbdbd;">Poster not found<br><small>{label}</small></div>',
+                    unsafe_allow_html=True,
+                )
+
+
 # ============================================================
 # Sidebar
 # ============================================================
 with st.sidebar:
-    # Netflix-style wordmark
+    # TMDB-style wordmark
     st.markdown(
-        '<div style="font-size:2rem;font-weight:900;letter-spacing:-1px;color:#e50914;'
+        '<div style="font-size:2rem;font-weight:900;letter-spacing:-1px;color:#01b4e4;'
         'margin-bottom:4px;font-family:Arial Black,Arial,sans-serif;">CINEAI</div>'
-        '<div style="font-size:11px;color:#808080;margin-bottom:16px;letter-spacing:1.5px;text-transform:uppercase;">Recommendation Engine</div>',
+        '<div style="font-size:11px;color:#90cea1;margin-bottom:16px;letter-spacing:1.5px;text-transform:uppercase;">Recommendation Engine</div>',
         unsafe_allow_html=True,
     )
 
     # Profile avatar row
     st.markdown(
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">'
-        '<div style="width:32px;height:32px;border-radius:4px;background:#e50914;'
+        '<div style="width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#01b4e4,#90cea1);'
         'display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;">U</div>'
-        '<span style="font-size:13px;color:#e5e5e5;">My Profile</span></div>',
+        '<span style="font-size:13px;color:#eef5fb;">My Profile</span></div>',
         unsafe_allow_html=True,
     )
-    st.markdown('<hr style="border-color:#2a2a2a;margin:8px 0 12px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border-color:rgba(160, 200, 230, 0.16);margin:8px 0 12px 0;">', unsafe_allow_html=True)
 
     _NAV_ITEMS = [
         ("🏠", "Home",               "Home"),
@@ -811,11 +888,12 @@ with st.sidebar:
         ("🎥", "Movie Details",      "Movie Details"),
         ("🌟", "My Recommendations", "My Recommendations"),
         ("📊", "Analytics",          "Analytics"),
+        ("🖼️", "Posters",            "Posters"),
     ]
     for _icon, _label, _pkey in _NAV_ITEMS:
         if st.session_state.page == _pkey:
             st.markdown(
-                f'<div style="background:rgba(229,9,20,0.15);border-left:3px solid #e50914;'
+                f'<div style="background:rgba(1,180,228,0.15);border-left:3px solid #01b4e4;'
                 f'border-radius:0 4px 4px 0;padding:10px 14px;color:#fff;font-weight:700;'
                 f'font-size:14px;margin-bottom:2px;">'
                 f'{_icon}&nbsp;&nbsp;{_label}</div>',
@@ -878,6 +956,36 @@ with st.sidebar:
         st.success("✅ Real posters enabled")
     else:
         st.info("ℹ️ Add TMDB key to load real movie posters")
+
+    st.markdown("---")
+    st.markdown("### 🔎 Show Posters for Specific Movies")
+    poster_query = st.text_input(
+        "Movie IDs or titles (comma-separated)",
+        value=st.session_state.get("poster_query", ""),
+        placeholder="e.g. 1, 356, The Matrix, Inception",
+        help="Enter one or more MovieLens movieIds or movie titles separated by commas.",
+    )
+    if poster_query != st.session_state.get("poster_query", ""):
+        st.session_state.poster_query = poster_query
+
+    if st.button("Show Posters", use_container_width=True):
+        st.session_state.page = "Posters"
+        st.rerun()
+
+    if st.button("Prefetch all posters (save to data/posters.csv)", use_container_width=True):
+        key = st.session_state.get("tmdb_api_key", "").strip()
+        if not key:
+            st.error("TMDB API Key required to prefetch posters. Paste it above and try again.")
+        else:
+            with st.spinner("Prefetching posters — this may take a few minutes…"):
+                try:
+                    out_file = ROOT / "data" / "posters.csv"
+                    prefetch_posters_for_movies(data["movies"], data.get("tmdb_map", {}), key, out_file)
+                    # reload into memory
+                    _PRELOADED_POSTERS.update(load_prefetched_posters(out_file))
+                    st.success(f"Prefetched posters saved to {out_file}")
+                except Exception as exc:
+                    st.error(f"Prefetch failed: {exc}")
 
     st.markdown("---")
     st.caption("Hotkeys: J = previous rail, K = next rail")
@@ -944,17 +1052,17 @@ if st.session_state.page == "Home":
         '  padding:10px 26px !important; letter-spacing:0 !important; text-decoration:none !important;'
         '  border:none !important; box-shadow:none !important; min-height:auto !important; }'
         '.hero-action-row .stButton:first-child > button {'
-        '  background:#ffffff !important; color:#000000 !important; }'
+        '  background:#ffffff !important; color:#03111d !important; }'
         '.hero-action-row .stButton:first-child > button:hover {'
-        '  background:rgba(255,255,255,0.75) !important; transform:none !important; }'
+        '  background:rgba(255,255,255,0.92) !important; transform:none !important; }'
         '.hero-action-row [data-testid="stLinkButton"] a {'
-        '  background:#ffffff !important; color:#000000 !important; }'
+        '  background:#ffffff !important; color:#03111d !important; }'
         '.hero-action-row [data-testid="stLinkButton"] a:hover {'
-        '  background:rgba(255,255,255,0.75) !important; color:#000000 !important; }'
+        '  background:rgba(255,255,255,0.92) !important; color:#03111d !important; }'
         '.hero-action-row .stButton:last-child > button {'
-        '  background:rgba(109,109,110,0.7) !important; color:#ffffff !important; }'
+        '  background:rgba(255,255,255,0.08) !important; color:#ffffff !important; border:1px solid rgba(255,255,255,0.12) !important; }'
         '.hero-action-row .stButton:last-child > button:hover {'
-        '  background:rgba(109,109,110,0.4) !important; transform:none !important; }'
+        '  background:rgba(1,180,228,0.14) !important; transform:none !important; }'
         '</style>'
         '<div class="hero-action-row">',
         unsafe_allow_html=True,
@@ -1034,6 +1142,19 @@ elif st.session_state.page == "Search":
         st.markdown('<div class="nf-row-label">📈 Popular on CineAI</div>', unsafe_allow_html=True)
         all_movies = data["movie_stats"].sort_values("popularity_score", ascending=False)
         render_movie_grid(all_movies.head(20), cols=10, key_prefix="browse")
+
+
+# ============================================================
+# PAGE: Posters
+# ============================================================
+elif st.session_state.page == "Posters":
+    st.markdown("# 🖼️ Posters")
+    if st.button("← Back"):
+        st.session_state.page = "Home"
+        st.rerun()
+
+    poster_q = st.session_state.get("poster_query", "")
+    render_posters_from_query(poster_q)
 
 
 # ============================================================
@@ -1171,7 +1292,7 @@ elif st.session_state.page == "Movie Details":
                 fig.patch.set_facecolor("#141414")
                 ax.set_facecolor("#181818")
                 bins = [0.25, 0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75, 4.25, 4.75, 5.25]
-                ax.hist(movie_ratings, bins=bins, color="#e50914", edgecolor="#141414")
+                ax.hist(movie_ratings, bins=bins, color="#01b4e4", edgecolor="#0b1320")
                 ax.tick_params(colors="#fff")
                 ax.set_xlabel("Rating", color="#fff")
                 ax.set_ylabel("Count", color="#fff")

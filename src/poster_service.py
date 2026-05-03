@@ -23,10 +23,14 @@ Getting a free TMDB API key
 
 import requests
 import re
+from pathlib import Path
+import csv
+import pandas as pd
 
 TMDB_BASE   = "https://api.themoviedb.org/3/movie/{tmdb_id}"
 TMDB_SEARCH = "https://api.themoviedb.org/3/search/movie"
 TMDB_IMG    = "https://image.tmdb.org/t/p/w300{poster_path}"
+WIKI_API    = "https://en.wikipedia.org/w/api.php"
 TIMEOUT_SEC = 5
 
 # In-process cache  { tmdbId → poster_url | None }
@@ -112,6 +116,79 @@ def get_poster_url_by_title(title: str, api_key: str) -> str | None:
         return None
 
 
+def get_poster_url_from_wikipedia(title: str) -> str | None:
+    """Fetch a movie thumbnail from Wikipedia by title, or None.
+
+    This is a no-key fallback source for cases where TMDB API key is not set.
+    """
+    query = _normalize_title(title)
+    if not query:
+        return None
+
+    cache_key = f"wiki::{query.lower()}"
+    if cache_key in _search_cache:
+        return _search_cache[cache_key]
+
+    try:
+        # 1) Find likely page title
+        resp = requests.get(
+            WIKI_API,
+            params={
+                "action": "query",
+                "format": "json",
+                "list": "search",
+                "srlimit": 1,
+                "srsearch": f"{query} film",
+            },
+            timeout=TIMEOUT_SEC,
+        )
+        if resp.status_code != 200:
+            _search_cache[cache_key] = None
+            return None
+
+        data = resp.json()
+        search_results = data.get("query", {}).get("search", [])
+        if not search_results:
+            _search_cache[cache_key] = None
+            return None
+
+        page_title = search_results[0].get("title")
+        if not page_title:
+            _search_cache[cache_key] = None
+            return None
+
+        # 2) Fetch page thumbnail
+        thumb_resp = requests.get(
+            WIKI_API,
+            params={
+                "action": "query",
+                "format": "json",
+                "prop": "pageimages",
+                "piprop": "thumbnail",
+                "pithumbsize": 500,
+                "titles": page_title,
+            },
+            timeout=TIMEOUT_SEC,
+        )
+        if thumb_resp.status_code != 200:
+            _search_cache[cache_key] = None
+            return None
+
+        pages = thumb_resp.json().get("query", {}).get("pages", {})
+        for _, page in pages.items():
+            thumb = page.get("thumbnail", {})
+            source = thumb.get("source")
+            if source:
+                _search_cache[cache_key] = source
+                return source
+
+        _search_cache[cache_key] = None
+        return None
+    except Exception:  # noqa: BLE001
+        _search_cache[cache_key] = None
+        return None
+
+
 def batch_fetch_posters(tmdb_ids: list[int], api_key: str) -> dict:
     """Fetch poster URLs for a list of TMDB IDs.
 
@@ -128,3 +205,52 @@ def clear_cache() -> None:
     """Clear the in-memory poster cache (useful for testing)."""
     _cache.clear()
     _search_cache.clear()
+
+
+def prefetch_posters_for_movies(movies_df: pd.DataFrame, tmdb_map: dict, api_key: str, out_path: str | Path) -> pd.DataFrame:
+    """Prefetch poster URLs for every movie in `movies_df` and save to CSV.
+
+    CSV columns: movieId, tmdbId, poster_url
+    Returns the dataframe that was written.
+    """
+    rows = []
+    outp = Path(out_path)
+    outp.parent.mkdir(parents=True, exist_ok=True)
+
+    for _, r in movies_df.iterrows():
+        mid = int(r.get("movieId"))
+        title = str(r.get("title", ""))
+        tmdb_id = tmdb_map.get(mid)
+        url = None
+        if api_key and api_key.strip():
+            if tmdb_id:
+                url = get_poster_url(tmdb_id, api_key)
+            if not url:
+                url = get_poster_url_by_title(title, api_key)
+        if not url:
+            url = get_poster_url_from_wikipedia(title)
+        rows.append({"movieId": mid, "tmdbId": int(tmdb_id) if tmdb_id else None, "poster_url": url or ""})
+
+    df = pd.DataFrame(rows)
+    df.to_csv(outp, index=False)
+    return df
+
+
+def load_prefetched_posters(path: str | Path) -> dict:
+    """Load prefetched posters CSV and return { movieId -> poster_url | None }."""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        df = pd.read_csv(p)
+        result = {}
+        for _, r in df.iterrows():
+            try:
+                mid = int(r.get("movieId"))
+            except Exception:
+                continue
+            url = r.get("poster_url")
+            result[mid] = url if pd.notna(url) and str(url).strip() else None
+        return result
+    except Exception:
+        return {}
